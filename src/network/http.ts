@@ -14,7 +14,7 @@ export interface HttpResponse<T> {
 async function request<T>(
   url: string,
   options: RequestInit,
-  operation: string,
+  operation: string
 ): Promise<HttpResponse<T>> {
   let response: Response;
   try {
@@ -24,7 +24,7 @@ async function request<T>(
       error instanceof Error ? error.message : 'Network request failed';
     throw new SignicNetworkError(
       `Failed to ${operation}: ${message}`,
-      operation,
+      operation
     );
   }
 
@@ -35,7 +35,7 @@ async function request<T>(
     throw new SignicError(
       `Failed to ${operation}: Invalid JSON response`,
       operation,
-      response.status,
+      response.status
     );
   }
 
@@ -52,45 +52,47 @@ async function request<T>(
 
 export async function httpGet<T>(
   url: string,
-  headers: Record<string, string>,
+  headers: Record<string, string>
 ): Promise<HttpResponse<T>> {
-  return request<T>(url, { method: 'GET', headers }, url.split('/').pop() ?? 'get');
+  return request<T>(
+    url,
+    { method: 'GET', headers },
+    url.split('/').pop() ?? 'get'
+  );
 }
 
 export async function httpPost<T>(
   url: string,
   body: unknown,
-  headers: Record<string, string>,
+  headers: Record<string, string>
 ): Promise<HttpResponse<T>> {
   return request<T>(
     url,
     { method: 'POST', headers, body: JSON.stringify(body) },
-    url.split('/').pop() ?? 'post',
+    url.split('/').pop() ?? 'post'
   );
 }
 
 export async function httpPut<T>(
   url: string,
   body: unknown,
-  headers: Record<string, string>,
+  headers: Record<string, string>
 ): Promise<HttpResponse<T>> {
   return request<T>(
     url,
     { method: 'PUT', headers, body: JSON.stringify(body) },
-    url.split('/').pop() ?? 'put',
+    url.split('/').pop() ?? 'put'
   );
 }
 
 export function handleApiError(
   status: number,
   responseData: unknown,
-  operation: string,
+  operation: string
 ): SignicError {
   const data = responseData as Record<string, unknown> | null;
   const errorMessage =
-    (data?.error as string) ??
-    (data?.message as string) ??
-    'Unknown error';
+    (data?.error as string) ?? (data?.message as string) ?? 'Unknown error';
   const fullMessage = `Failed to ${operation}: ${errorMessage}`;
 
   if (status === 401 || status === 403) {

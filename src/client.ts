@@ -76,13 +76,13 @@ export class SignicClient {
     const authResponse = await this.authenticateWithWildduck(
       address,
       base64Signature,
-      siweMessage,
+      siweMessage
     );
 
     // Step 6: Find INBOX mailbox
     const inboxId = await this.findInboxMailboxId(
       authResponse.id!,
-      authResponse.token!,
+      authResponse.token!
     );
 
     this.authState = {
@@ -106,14 +106,14 @@ export class SignicClient {
 
     const response = await httpGet<WildduckMessagesResponse>(
       url,
-      this.wildduckHeaders(),
+      this.wildduckHeaders()
     );
 
     if (!response.data.success) {
       throw new SignicError(
         response.data.error ?? 'Failed to get messages',
         'getUnreadEmails',
-        response.status,
+        response.status
       );
     }
 
@@ -126,7 +126,7 @@ export class SignicClient {
   /** Mark a message as read */
   async markAsRead(
     messageId: number,
-    mailboxId?: string,
+    mailboxId?: string
   ): Promise<MarkAsReadResult> {
     this.requireAuth();
     const auth = this.authState!;
@@ -136,14 +136,14 @@ export class SignicClient {
     const response = await httpPut<WildduckUpdateMessageResponse>(
       url,
       { seen: true },
-      this.wildduckHeaders(),
+      this.wildduckHeaders()
     );
 
     if (!response.data.success) {
       throw new SignicError(
         response.data.error ?? 'Failed to mark as read',
         'markAsRead',
-        response.status,
+        response.status
       );
     }
 
@@ -161,7 +161,7 @@ export class SignicClient {
     if (!this.authState) {
       throw new SignicAuthError(
         'Not connected. Call connect() first.',
-        'requireAuth',
+        'requireAuth'
       );
     }
   }
@@ -169,7 +169,7 @@ export class SignicClient {
   private async getSiweMessage(
     address: string,
     domain: string,
-    url: string,
+    url: string
   ): Promise<string> {
     const params = new URLSearchParams({
       chainId: this.chainId.toString(),
@@ -178,18 +178,19 @@ export class SignicClient {
     });
     const endpoint = `${this.indexerUrl}/wallets/${encodeURIComponent(address)}/message?${params}`;
 
-    const response = await httpGet<
-      IndexerResponse<IndexerSignInMessageData>
-    >(endpoint, {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    });
+    const response = await httpGet<IndexerResponse<IndexerSignInMessageData>>(
+      endpoint,
+      {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      }
+    );
 
     if (!response.data.success || !response.data.data?.message) {
       throw new SignicError(
         response.data.error ?? 'Failed to get SIWE message',
         'getSiweMessage',
-        response.status,
+        response.status
       );
     }
 
@@ -200,15 +201,17 @@ export class SignicClient {
     const cleanHex = hexSignature.startsWith('0x')
       ? hexSignature.slice(2)
       : hexSignature;
-    return Buffer.from(cleanHex, 'hex')
-      .toString('base64')
-      .replace(/[\r\n]/g, '');
+    const binaryString = cleanHex
+      .match(/.{2}/g)!
+      .map((byte) => String.fromCharCode(parseInt(byte, 16)))
+      .join('');
+    return btoa(binaryString).replace(/[\r\n]/g, '');
   }
 
   private async getWalletAccounts(
     address: string,
     message: string,
-    base64Signature: string,
+    base64Signature: string
   ): Promise<void> {
     const headers = {
       'Content-Type': 'application/json',
@@ -219,15 +222,16 @@ export class SignicClient {
     };
     const endpoint = `${this.indexerUrl}/wallets/${encodeURIComponent(address)}/accounts`;
 
-    const response = await httpGet<
-      IndexerResponse<IndexerEmailAccountsResult>
-    >(endpoint, headers);
+    const response = await httpGet<IndexerResponse<IndexerEmailAccountsResult>>(
+      endpoint,
+      headers
+    );
 
     if (!response.data.success) {
       throw new SignicAuthError(
         response.data.error ?? 'Failed to get wallet accounts',
         'getWalletAccounts',
-        response.status,
+        response.status
       );
     }
   }
@@ -235,7 +239,7 @@ export class SignicClient {
   private async authenticateWithWildduck(
     address: string,
     base64Signature: string,
-    message: string,
+    message: string
   ): Promise<WildduckAuthResponse> {
     const body = {
       username: address,
@@ -250,18 +254,14 @@ export class SignicClient {
     const response = await httpPost<WildduckAuthResponse>(
       `${this.wildduckUrl}/authenticate`,
       body,
-      { 'Content-Type': 'application/json', Accept: 'application/json' },
+      { 'Content-Type': 'application/json', Accept: 'application/json' }
     );
 
-    if (
-      !response.data.success ||
-      !response.data.id ||
-      !response.data.token
-    ) {
+    if (!response.data.success || !response.data.id || !response.data.token) {
       throw new SignicAuthError(
         response.data.error ?? 'WildDuck authentication failed',
         'authenticateWithWildduck',
-        response.status,
+        response.status
       );
     }
 
@@ -270,7 +270,7 @@ export class SignicClient {
 
   private async findInboxMailboxId(
     userId: string,
-    accessToken: string,
+    accessToken: string
   ): Promise<string> {
     const url = `${this.wildduckUrl}/users/${userId}/mailboxes?counters=true`;
 
@@ -284,12 +284,12 @@ export class SignicClient {
       throw new SignicError(
         response.data.error ?? 'Failed to get mailboxes',
         'findInboxMailboxId',
-        response.status,
+        response.status
       );
     }
 
     const inbox = response.data.results.find(
-      (mb) => mb.specialUse === '\\Inbox' || mb.path === 'INBOX',
+      (mb) => mb.specialUse === '\\Inbox' || mb.path === 'INBOX'
     );
 
     if (!inbox) {

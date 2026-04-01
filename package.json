@@ -1,38 +1,59 @@
 {
   "name": "signic_sdk",
   "version": "0.1.0",
-  "description": "Node.js SDK for Signic email - sign in with Ethereum, read and manage emails",
+  "description": "Node.js and browser SDK for Signic email - sign in with Ethereum, read and manage emails",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "files": [
     "dist/**/*"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "build:watch": "tsc -p tsconfig.build.json --watch",
-    "clean": "rm -rf dist",
-    "prepublishOnly": "bun run clean && bun run build",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.esm.json",
+    "build:watch": "tsc -p tsconfig.esm.json --watch",
+    "clean": "rimraf dist",
+    "dev": "tsc --watch",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
-    "format": "prettier --write 'src/**/*.ts'",
-    "format:check": "prettier --check 'src/**/*.ts'",
-    "verify": "bun run typecheck && bun run test:run && bun run build"
+    "format": "prettier --write \"src/**/*.{ts,js,json,md}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,js,json,md}\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage",
+    "verify": "bun run typecheck && bun run lint && bun run test:run && bun run build",
+    "prepublishOnly": "bun run clean && bun run verify"
   },
   "dependencies": {
     "viem": "^2.38.4"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@eslint/js": "^9.38.0",
+    "@types/node": "^24.9.1",
+    "@typescript-eslint/eslint-plugin": "^8.46.2",
+    "@typescript-eslint/parser": "^8.46.2",
+    "@vitest/coverage-v8": "^4.0.16",
+    "eslint": "^9.38.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "globals": "^16.4.0",
+    "prettier": "^3.6.2",
+    "rimraf": "^6.0.1",
     "typescript": "^5.9.0",
-    "vitest": "^3.2.0"
+    "vitest": "^4.0.16"
   },
   "engines": {
     "node": ">=20.0.0"
   },
-  "license": "BUSL-1.1"
+  "license": "BUSL-1.1",
+  "publishConfig": {
+    "access": "public"
+  }
 }
