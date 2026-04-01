@@ -1,6 +1,6 @@
 {
   "name": "signic_sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Node.js and browser SDK for Signic email - sign in with Ethereum, read and manage emails",
   "type": "module",
   "main": "./dist/index.js",
