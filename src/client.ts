@@ -6,6 +6,7 @@ import type {
   SignicClientConfig,
   SignicAuthState,
   SignicEmail,
+  SignicEmailDetail,
   UnreadEmailsResult,
   MarkAsReadResult,
   IndexerResponse,
@@ -14,6 +15,7 @@ import type {
   WildduckAuthResponse,
   WildduckMailboxResponse,
   WildduckMessagesResponse,
+  WildduckMessageDetailResponse,
   WildduckUpdateMessageResponse,
   WildduckMessageListItem,
 } from './types.js';
@@ -21,6 +23,39 @@ import type {
 const DEFAULT_EMAIL_DOMAIN = 'signic.email';
 const DEFAULT_CHAIN_ID = 1;
 
+/**
+ * Main client for the Signic decentralized email platform.
+ *
+ * Authenticates via SIWE (Sign-In with Ethereum) through a two-service flow:
+ * 1. **Indexer API** — generates and verifies the SIWE message
+ * 2. **WildDuck API** — issues an access token and serves email data
+ *
+ * Call {@link connect} before using any email methods. Methods that require
+ * authentication will throw {@link SignicAuthError} if called before connect.
+ *
+ * @example
+ * ```ts
+ * import { SignicClient } from '@sudobility/signic_sdk';
+ *
+ * const client = new SignicClient({
+ *   privateKey: '0xac09...',
+ *   indexerUrl: 'https://api.signic.email/idx',
+ *   wildduckUrl: 'https://api.signic.email/api',
+ * });
+ *
+ * // Derive addresses (no auth needed)
+ * console.log(client.getAddress());      // "0xf39F..."
+ * console.log(client.getEmailAddress()); // "0xf39F...@signic.email"
+ *
+ * // Authenticate
+ * await client.connect();
+ *
+ * // Read emails
+ * const { emails, total } = await client.getUnreadEmails(10);
+ * const full = await client.getEmail(emails[0].id);
+ * await client.markAsRead(emails[0].id);
+ * ```
+ */
 export class SignicClient {
   private readonly account: PrivateKeyAccount;
   private readonly indexerUrl: string;
@@ -37,22 +72,35 @@ export class SignicClient {
     this.chainId = config.chainId ?? DEFAULT_CHAIN_ID;
   }
 
-  /** Returns the wallet address derived from the private key */
+  /** Returns the EVM wallet address derived from the private key. Does not require auth. */
   getAddress(): string {
     return this.account.address;
   }
 
-  /** Returns the signic.email address for this wallet */
+  /** Returns the Signic email address for this wallet (e.g. "0xabc...@signic.email"). Does not require auth. */
   getEmailAddress(): string {
     return `${this.account.address}@${this.emailDomain}`;
   }
 
-  /** Returns true if connect() has been called successfully */
+  /** Returns true if {@link connect} has completed successfully. */
   isConnected(): boolean {
     return this.authState !== null;
   }
 
-  /** Authenticate via SIWE signature */
+  /**
+   * Authenticate with the Signic platform via SIWE.
+   *
+   * Performs a 6-step flow:
+   * 1. Fetch a SIWE message from the Indexer
+   * 2. Sign the message with the wallet's private key (via viem)
+   * 3. Convert the signature from hex to base64
+   * 4. Verify the signature with the Indexer (also fetches wallet accounts)
+   * 5. Authenticate with WildDuck using the verified signature
+   * 6. Locate the INBOX mailbox ID for subsequent email operations
+   *
+   * @throws {SignicAuthError} If signature verification or WildDuck authentication fails
+   * @throws {SignicNetworkError} If any API request fails at the network level
+   */
   async connect(): Promise<void> {
     const address = this.account.address;
     const domain = this.emailDomain;
@@ -66,7 +114,7 @@ export class SignicClient {
       message: siweMessage,
     });
 
-    // Step 3: Format signature hex → base64
+    // Step 3: Format signature hex -> base64
     const base64Signature = this.formatSignatureToBase64(rawSignature);
 
     // Step 4: Verify with Indexer (get wallet accounts)
@@ -93,7 +141,13 @@ export class SignicClient {
     };
   }
 
-  /** Retrieve unread emails from the inbox */
+  /**
+   * Fetch unread emails from the inbox.
+   * Returns summary objects — use {@link getEmail} for the full message body.
+   *
+   * @param limit - Maximum number of emails to return (default: 50)
+   * @throws {SignicAuthError} If not connected
+   */
   async getUnreadEmails(limit: number = 50): Promise<UnreadEmailsResult> {
     this.requireAuth();
     const auth = this.authState!;
@@ -123,7 +177,71 @@ export class SignicClient {
     };
   }
 
-  /** Mark a message as read */
+  /**
+   * Fetch the complete email by its ID, including HTML/text body, all recipients,
+   * attachments, flags, and verification results.
+   *
+   * @param emailId - WildDuck message UID (from {@link SignicEmail.id})
+   * @param mailboxId - Mailbox to fetch from (defaults to INBOX)
+   * @throws {SignicAuthError} If not connected
+   */
+  async getEmail(
+    emailId: number,
+    mailboxId?: string
+  ): Promise<SignicEmailDetail> {
+    this.requireAuth();
+    const auth = this.authState!;
+    const mboxId = mailboxId ?? auth.inboxMailboxId;
+
+    const url = `${this.wildduckUrl}/users/${auth.userId}/mailboxes/${mboxId}/messages/${emailId}`;
+    const response = await httpGet<WildduckMessageDetailResponse>(
+      url,
+      this.wildduckHeaders()
+    );
+
+    if (!response.data.success) {
+      throw new SignicError(
+        response.data.error ?? 'Failed to get message',
+        'getEmail',
+        response.status
+      );
+    }
+
+    const msg = response.data;
+    return {
+      id: msg.id,
+      mailboxId: msg.mailbox,
+      thread: msg.thread,
+      from: msg.from ?? { address: '', name: '' },
+      replyTo: msg.replyTo,
+      to: msg.to,
+      cc: msg.cc ?? [],
+      bcc: msg.bcc ?? [],
+      subject: msg.subject,
+      messageId: msg.messageId,
+      date: msg.date,
+      idate: msg.idate,
+      size: msg.size,
+      seen: msg.seen,
+      flagged: msg.flagged,
+      deleted: msg.deleted,
+      draft: msg.draft,
+      answered: msg.answered,
+      forwarded: msg.forwarded,
+      html: msg.html ?? [],
+      text: msg.text ?? '',
+      attachments: msg.attachments ?? [],
+      verificationResults: msg.verificationResults,
+    };
+  }
+
+  /**
+   * Mark a message as read (sets the \\Seen flag).
+   *
+   * @param messageId - WildDuck message UID
+   * @param mailboxId - Mailbox containing the message (defaults to INBOX)
+   * @throws {SignicAuthError} If not connected
+   */
   async markAsRead(
     messageId: number,
     mailboxId?: string
@@ -157,6 +275,7 @@ export class SignicClient {
   // Private helpers
   // ============================================================
 
+  /** Guard that throws SignicAuthError if connect() hasn't been called. */
   private requireAuth(): void {
     if (!this.authState) {
       throw new SignicAuthError(
@@ -166,6 +285,7 @@ export class SignicClient {
     }
   }
 
+  /** Fetch the SIWE message to sign from the Indexer API. */
   private async getSiweMessage(
     address: string,
     domain: string,
@@ -197,6 +317,7 @@ export class SignicClient {
     return response.data.data.message;
   }
 
+  /** Convert a hex-encoded signature (0x...) to a base64 string for API headers. */
   private formatSignatureToBase64(hexSignature: string): string {
     const cleanHex = hexSignature.startsWith('0x')
       ? hexSignature.slice(2)
@@ -208,6 +329,10 @@ export class SignicClient {
     return btoa(binaryString).replace(/[\r\n]/g, '');
   }
 
+  /**
+   * Verify the SIWE signature with the Indexer and retrieve wallet accounts.
+   * Sends the signature + message in custom headers (x-signature, x-message, x-signer).
+   */
   private async getWalletAccounts(
     address: string,
     message: string,
@@ -236,6 +361,10 @@ export class SignicClient {
     }
   }
 
+  /**
+   * Exchange the verified SIWE signature for a WildDuck access token.
+   * The token is a Bearer token used for all subsequent WildDuck API calls.
+   */
   private async authenticateWithWildduck(
     address: string,
     base64Signature: string,
@@ -268,6 +397,7 @@ export class SignicClient {
     return response.data;
   }
 
+  /** Find the INBOX mailbox ID by querying the user's mailbox list. */
   private async findInboxMailboxId(
     userId: string,
     accessToken: string
@@ -299,6 +429,7 @@ export class SignicClient {
     return inbox.id;
   }
 
+  /** Build the standard Authorization + JSON headers for WildDuck API calls. */
   private wildduckHeaders(): Record<string, string> {
     return {
       'Content-Type': 'application/json',
@@ -307,6 +438,7 @@ export class SignicClient {
     };
   }
 
+  /** Map a WildDuck message list item to the public SignicEmail shape. */
   private mapMessageToEmail(msg: WildduckMessageListItem): SignicEmail {
     return {
       id: msg.id,
