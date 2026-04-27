@@ -412,3 +412,143 @@ describe('SignicClient.markAsRead after connect', () => {
     expect(url).toContain('/mailboxes/custom-mailbox/messages/99');
   });
 });
+
+describe('SignicClient.sendEmail before connect', () => {
+  it('throws SignicAuthError', async () => {
+    const client = new SignicClient({
+      privateKey: TEST_PRIVATE_KEY,
+      indexerUrl: 'https://indexer.test',
+      wildduckUrl: 'https://api.test',
+    });
+    await expect(
+      client.sendEmail({
+        to: 'test@signic.email',
+        subject: 'Hi',
+        html: '<p>Hi</p>',
+      })
+    ).rejects.toThrow(SignicAuthError);
+  });
+});
+
+describe('SignicClient.sendEmail after connect', () => {
+  async function createConnectedClient() {
+    const client = new SignicClient({
+      privateKey: TEST_PRIVATE_KEY,
+      indexerUrl: 'https://indexer.test',
+      wildduckUrl: 'https://api.test',
+    });
+
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: {
+            walletAddress: TEST_ADDRESS,
+            chainType: 'evm',
+            message: 'Sign in',
+            chainId: 1,
+          },
+          timestamp: new Date().toISOString(),
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          data: { accounts: [] },
+          timestamp: new Date().toISOString(),
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          id: 'user1',
+          username: TEST_ADDRESS,
+          token: 'tok',
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          results: [
+            {
+              id: 'inbox1',
+              name: 'INBOX',
+              path: 'INBOX',
+              specialUse: '\\Inbox',
+              modifyIndex: 1,
+              subscribed: true,
+              hidden: false,
+            },
+          ],
+        })
+      );
+
+    await client.connect();
+    mockFetch.mockReset();
+    return client;
+  }
+
+  it('sends email via WildDuck submit endpoint', async () => {
+    const client = await createConnectedClient();
+
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        message: { id: 'msg-123' },
+        queueId: 'queue-456',
+      })
+    );
+
+    const result = await client.sendEmail({
+      to: 'recipient@signic.email',
+      subject: 'Test Subject',
+      html: '<p>Hello</p>',
+      text: 'Hello',
+    });
+
+    expect(result).toEqual({
+      messageId: 'msg-123',
+      queueId: 'queue-456',
+    });
+
+    // Verify the POST call
+    const [url, options] = mockFetch.mock.calls[0]!;
+    expect(url).toContain('/users/name/');
+    expect(url).toContain('/submit');
+    expect(options.method).toBe('POST');
+
+    const body = JSON.parse(options.body);
+    expect(body.from.address).toContain(TEST_ADDRESS.toLowerCase());
+    expect(body.to).toEqual([{ address: 'recipient@signic.email' }]);
+    expect(body.subject).toBe('Test Subject');
+    expect(body.html).toBe('<p>Hello</p>');
+    expect(body.text).toBe('Hello');
+    expect(body.indexer).toBeDefined();
+    expect(body.indexer.message).toContain('Indexer authentication message:');
+    expect(body.indexer.signature).toBeTruthy();
+  });
+
+  it('handles string array for to field', async () => {
+    const client = await createConnectedClient();
+
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        message: { id: 'msg-789' },
+        queueId: 'queue-012',
+      })
+    );
+
+    await client.sendEmail({
+      to: ['a@signic.email', 'b@signic.email'],
+      subject: 'Multi',
+      html: '<p>Hi all</p>',
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
+    expect(body.to).toEqual([
+      { address: 'a@signic.email' },
+      { address: 'b@signic.email' },
+    ]);
+  });
+});

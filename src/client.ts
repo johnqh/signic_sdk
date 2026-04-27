@@ -7,6 +7,8 @@ import type {
   SignicAuthState,
   SignicEmail,
   SignicEmailDetail,
+  SendEmailParams,
+  SendEmailResult,
   UnreadEmailsResult,
   MarkAsReadResult,
   IndexerResponse,
@@ -18,6 +20,7 @@ import type {
   WildduckMessageDetailResponse,
   WildduckUpdateMessageResponse,
   WildduckMessageListItem,
+  WildduckSubmitResponse,
 } from './types.js';
 
 const DEFAULT_EMAIL_DOMAIN = 'signic.email';
@@ -271,6 +274,58 @@ export class SignicClient {
     };
   }
 
+  /**
+   * Send an email via WildDuck.
+   *
+   * Uses indexer-style authentication: signs a random message with the
+   * wallet's private key and includes it in the request payload.
+   *
+   * @param params - Email parameters (to, subject, html, optional text)
+   * @throws {SignicAuthError} If not connected
+   * @throws {SignicError} If WildDuck rejects the submission
+   */
+  async sendEmail(params: SendEmailParams): Promise<SendEmailResult> {
+    this.requireAuth();
+
+    const senderAddress = this.account.address.toLowerCase();
+    const senderEmail = `${senderAddress}@${this.emailDomain}`;
+    const recipients = Array.isArray(params.to) ? params.to : [params.to];
+
+    const indexerAuth = await this.generateIndexerAuth();
+
+    const body: Record<string, unknown> = {
+      from: { address: senderEmail },
+      to: recipients.map((addr) => ({ address: addr })),
+      subject: params.subject,
+      html: params.html,
+      indexer: indexerAuth,
+    };
+    if (params.text) {
+      body.text = params.text;
+    }
+
+    const username = senderAddress;
+    const url = `${this.wildduckUrl}/users/name/${encodeURIComponent(username)}/submit`;
+
+    const response = await httpPost<WildduckSubmitResponse>(url, body, {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    });
+
+    if (!response.data.success) {
+      throw new SignicError(
+        response.data.error ?? 'Failed to send email',
+        'sendEmail',
+        response.status
+      );
+    }
+
+    return {
+      messageId: String(response.data.message?.id ?? ''),
+      queueId: response.data.queueId ?? '',
+    };
+  }
+
   // ============================================================
   // Private helpers
   // ============================================================
@@ -436,6 +491,29 @@ export class SignicClient {
       Accept: 'application/json',
       Authorization: `Bearer ${this.authState!.accessToken}`,
     };
+  }
+
+  /**
+   * Generate indexer-style authentication for the WildDuck submit endpoint.
+   * Creates a random message, signs it with the wallet's private key, and
+   * returns the message + base64-encoded signature.
+   */
+  private async generateIndexerAuth(): Promise<{
+    message: string;
+    signature: string;
+  }> {
+    const randomBytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(randomBytes);
+    const randomHex = Array.from(randomBytes)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    const timestamp = Date.now();
+    const message = `Indexer authentication message: ${randomHex} at ${timestamp}`;
+
+    const rawSignature = await this.account.signMessage({ message });
+    const signature = this.formatSignatureToBase64(rawSignature);
+
+    return { message, signature };
   }
 
   /** Map a WildDuck message list item to the public SignicEmail shape. */
