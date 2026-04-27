@@ -7,6 +7,8 @@ export type {
   SignicEmailAttachment,
   UnreadEmailsResult,
   MarkAsReadResult,
+  SendEmailParams,
+  SendEmailResult,
 } from './types.js';
 export {
   SignicError,

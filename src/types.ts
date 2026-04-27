@@ -153,6 +153,26 @@ export interface SignicEmailDetail {
   };
 }
 
+/** Parameters for sending an email via {@link SignicClient.sendEmail}. */
+export interface SendEmailParams {
+  /** Recipient email address(es) */
+  to: string | string[];
+  /** Email subject line */
+  subject: string;
+  /** HTML email body */
+  html: string;
+  /** Optional plain-text fallback body */
+  text?: string;
+}
+
+/** Result from {@link SignicClient.sendEmail}. */
+export interface SendEmailResult {
+  /** WildDuck message ID */
+  messageId: string;
+  /** WildDuck queue ID */
+  queueId: string;
+}
+
 // ============================================================
 // Internal types (API response shapes, not exported via index)
 // ============================================================
@@ -310,5 +330,13 @@ export interface WildduckMessageDetailResponse {
     spf: Record<string, unknown> | false;
     dkim: Record<string, unknown> | false;
   };
+  error?: string;
+}
+
+/** Response from POST /users/name/{username}/submit. */
+export interface WildduckSubmitResponse {
+  success: boolean;
+  message?: { id: string | number };
+  queueId?: string;
   error?: string;
 }
