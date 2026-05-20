@@ -1,9 +1,8 @@
-import { privateKeyToAccount } from 'viem/accounts';
-import type { PrivateKeyAccount } from 'viem/accounts';
 import { httpGet, httpPost, httpPut } from './network/http.js';
 import { SignicError, SignicAuthError } from './errors.js';
 import type {
   SignicClientConfig,
+  SignMessageResult,
   SignicAuthState,
   SignicEmail,
   SignicEmailDetail,
@@ -29,29 +28,33 @@ const DEFAULT_CHAIN_ID = 1;
 /**
  * Main client for the Signic decentralized email platform.
  *
- * Authenticates via SIWE (Sign-In with Ethereum) through a two-service flow:
- * 1. **Indexer API** — generates and verifies the SIWE message
+ * Authenticates via SIWE (Sign-In with Ethereum) or SIWS (Sign-In with Solana)
+ * through a two-service flow:
+ * 1. **Indexer API** — generates and verifies the sign-in message
  * 2. **WildDuck API** — issues an access token and serves email data
  *
- * Call {@link connect} before using any email methods. Methods that require
- * authentication will throw {@link SignicAuthError} if called before connect.
+ * Provide a {@link SignicClientConfig.signMessage} callback that returns both the
+ * wallet address and signature. Call {@link connect} with the wallet address to
+ * authenticate. Methods that require authentication will throw
+ * {@link SignicAuthError} if called before connect.
  *
  * @example
  * ```ts
  * import { SignicClient } from '@sudobility/signic_sdk';
  *
  * const client = new SignicClient({
- *   privateKey: '0xac09...',
  *   indexerUrl: 'https://api.signic.email/idx',
  *   wildduckUrl: 'https://api.signic.email/api',
+ *   signMessage: async (message) => ({
+ *     address: wallet.address,
+ *     signature: await wallet.signMessage(message),
+ *   }),
  * });
  *
- * // Derive addresses (no auth needed)
+ * await client.connect('0xf39F...');
+ *
  * console.log(client.getAddress());      // "0xf39F..."
  * console.log(client.getEmailAddress()); // "0xf39F...@signic.email"
- *
- * // Authenticate
- * await client.connect();
  *
  * // Read emails
  * const { emails, total } = await client.getUnreadEmails(10);
@@ -60,29 +63,37 @@ const DEFAULT_CHAIN_ID = 1;
  * ```
  */
 export class SignicClient {
-  private readonly account: PrivateKeyAccount;
   private readonly indexerUrl: string;
   private readonly wildduckUrl: string;
   private readonly emailDomain: string;
   private readonly chainId: number;
+  private readonly signMessageFn: (
+    message: string
+  ) => Promise<SignMessageResult>;
   private authState: SignicAuthState | null = null;
 
   constructor(config: SignicClientConfig) {
-    this.account = privateKeyToAccount(config.privateKey);
     this.indexerUrl = config.indexerUrl.replace(/\/+$/, '');
     this.wildduckUrl = config.wildduckUrl.replace(/\/+$/, '');
     this.emailDomain = config.emailDomain ?? DEFAULT_EMAIL_DOMAIN;
     this.chainId = config.chainId ?? DEFAULT_CHAIN_ID;
+    this.signMessageFn = config.signMessage;
   }
 
-  /** Returns the EVM wallet address derived from the private key. Does not require auth. */
+  /** Returns the wallet address. Requires {@link connect} to have been called. */
   getAddress(): string {
-    return this.account.address;
+    if (!this.authState) {
+      throw new SignicError(
+        'No address available. Call connect() first.',
+        'getAddress'
+      );
+    }
+    return this.authState.username;
   }
 
-  /** Returns the Signic email address for this wallet (e.g. "0xabc...@signic.email"). Does not require auth. */
+  /** Returns the Signic email address for this wallet (e.g. "0xabc...@signic.email"). Requires {@link connect}. */
   getEmailAddress(): string {
-    return `${this.account.address}@${this.emailDomain}`;
+    return `${this.getAddress()}@${this.emailDomain}`;
   }
 
   /** Returns true if {@link connect} has completed successfully. */
@@ -91,46 +102,38 @@ export class SignicClient {
   }
 
   /**
-   * Authenticate with the Signic platform via SIWE.
+   * Authenticate with the Signic platform.
    *
-   * Performs a 6-step flow:
-   * 1. Fetch a SIWE message from the Indexer
-   * 2. Sign the message with the wallet's private key (via viem)
-   * 3. Convert the signature from hex to base64
-   * 4. Verify the signature with the Indexer (also fetches wallet accounts)
-   * 5. Authenticate with WildDuck using the verified signature
-   * 6. Locate the INBOX mailbox ID for subsequent email operations
+   * Fetches a sign-in message from the Indexer for the given address, passes it
+   * to the {@link SignicClientConfig.signMessage} callback, and uses the returned
+   * address + signature pair to complete authentication.
    *
+   * @param address - Wallet address to authenticate (EVM hex or Solana base58)
    * @throws {SignicAuthError} If signature verification or WildDuck authentication fails
    * @throws {SignicNetworkError} If any API request fails at the network level
    */
-  async connect(): Promise<void> {
-    const address = this.account.address;
+  async connect(address: string): Promise<void> {
     const domain = this.emailDomain;
     const url = `https://${domain}`;
 
-    // Step 1: Get SIWE message from Indexer
-    const siweMessage = await this.getSiweMessage(address, domain, url);
+    // Step 1: Fetch the sign-in message from the Indexer
+    const siweMessage = await this.fetchSignInMessage(address, domain, url);
 
-    // Step 2: Sign the message with viem
-    const rawSignature = await this.account.signMessage({
-      message: siweMessage,
-    });
+    // Step 2: Sign externally via callback — returns { address, signature }
+    const result = await this.signMessageFn(siweMessage);
+    const base64Signature = this.formatSignatureToBase64(result.signature);
 
-    // Step 3: Format signature hex -> base64
-    const base64Signature = this.formatSignatureToBase64(rawSignature);
+    // Step 3: Verify with Indexer (get wallet accounts)
+    await this.getWalletAccounts(result.address, siweMessage, base64Signature);
 
-    // Step 4: Verify with Indexer (get wallet accounts)
-    await this.getWalletAccounts(address, siweMessage, base64Signature);
-
-    // Step 5: Authenticate with WildDuck
+    // Step 4: Authenticate with WildDuck
     const authResponse = await this.authenticateWithWildduck(
-      address,
+      result.address,
       base64Signature,
       siweMessage
     );
 
-    // Step 6: Find INBOX mailbox
+    // Step 5: Find INBOX mailbox
     const inboxId = await this.findInboxMailboxId(
       authResponse.id!,
       authResponse.token!
@@ -139,7 +142,7 @@ export class SignicClient {
     this.authState = {
       userId: authResponse.id!,
       accessToken: authResponse.token!,
-      username: address,
+      username: result.address,
       inboxMailboxId: inboxId,
     };
   }
@@ -287,7 +290,7 @@ export class SignicClient {
   async sendEmail(params: SendEmailParams): Promise<SendEmailResult> {
     this.requireAuth();
 
-    const senderAddress = this.account.address.toLowerCase();
+    const senderAddress = this.authState!.username.toLowerCase();
     const senderEmail = `${senderAddress}@${this.emailDomain}`;
     const recipients = Array.isArray(params.to) ? params.to : [params.to];
 
@@ -304,8 +307,7 @@ export class SignicClient {
       body.text = params.text;
     }
 
-    const username = senderAddress;
-    const url = `${this.wildduckUrl}/users/name/${encodeURIComponent(username)}/submit`;
+    const url = `${this.wildduckUrl}/users/name/${encodeURIComponent(senderAddress)}/submit`;
 
     const response = await httpPost<WildduckSubmitResponse>(url, body, {
       'Content-Type': 'application/json',
@@ -340,8 +342,8 @@ export class SignicClient {
     }
   }
 
-  /** Fetch the SIWE message to sign from the Indexer API. */
-  private async getSiweMessage(
+  /** Fetch the sign-in message from the Indexer API. */
+  private async fetchSignInMessage(
     address: string,
     domain: string,
     url: string
@@ -372,11 +374,16 @@ export class SignicClient {
     return response.data.data.message;
   }
 
-  /** Convert a hex-encoded signature (0x...) to a base64 string for API headers. */
-  private formatSignatureToBase64(hexSignature: string): string {
-    const cleanHex = hexSignature.startsWith('0x')
-      ? hexSignature.slice(2)
-      : hexSignature;
+  /**
+   * Convert a signature to base64 for API headers.
+   * Accepts hex (0x-prefixed) or base64. If the input starts with "0x",
+   * it is treated as hex and converted; otherwise it is returned as-is.
+   */
+  private formatSignatureToBase64(signature: string): string {
+    if (!signature.startsWith('0x')) {
+      return signature.replace(/[\r\n]/g, '');
+    }
+    const cleanHex = signature.slice(2);
     const binaryString = cleanHex
       .match(/.{2}/g)!
       .map((byte) => String.fromCharCode(parseInt(byte, 16)))
@@ -495,7 +502,7 @@ export class SignicClient {
 
   /**
    * Generate indexer-style authentication for the WildDuck submit endpoint.
-   * Creates a random message, signs it with the wallet's private key, and
+   * Creates a random message, signs it via the signMessage callback, and
    * returns the message + base64-encoded signature.
    */
   private async generateIndexerAuth(): Promise<{
@@ -510,8 +517,8 @@ export class SignicClient {
     const timestamp = Date.now();
     const message = `Indexer authentication message: ${randomHex} at ${timestamp}`;
 
-    const rawSignature = await this.account.signMessage({ message });
-    const signature = this.formatSignatureToBase64(rawSignature);
+    const result = await this.signMessageFn(message);
+    const signature = this.formatSignatureToBase64(result.signature);
 
     return { message, signature };
   }

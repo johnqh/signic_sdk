@@ -1,5 +1,5 @@
 export { SignicClient } from './client.js';
-export type { SignicClientConfig } from './types.js';
+export type { SignicClientConfig, SignMessageResult } from './types.js';
 export type {
   SignicEmail,
   SignicEmailAddress,

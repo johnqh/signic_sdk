@@ -3,20 +3,34 @@
 // ============================================================
 
 /**
+ * Result returned by the {@link SignicClientConfig.signMessage} callback.
+ * Ties the wallet address to its signature so they are always paired.
+ */
+export interface SignMessageResult {
+  /** The wallet address that produced the signature (EVM hex or Solana base58) */
+  address: string;
+  /** The signature as a hex string (0x-prefixed) or base64 string */
+  signature: string;
+}
+
+/**
  * Configuration for creating a {@link SignicClient} instance.
  *
  * @example
  * ```ts
  * const client = new SignicClient({
- *   privateKey: '0xac09...',
  *   indexerUrl: 'https://api.signic.email/idx',
  *   wildduckUrl: 'https://api.signic.email/api',
+ *   signMessage: async (message) => ({
+ *     address: wallet.address,
+ *     signature: await wallet.signMessage(message),
+ *   }),
  * });
+ *
+ * await client.connect();
  * ```
  */
 export interface SignicClientConfig {
-  /** EVM private key (hex string starting with 0x) */
-  privateKey: `0x${string}`;
   /** Indexer API base URL (e.g. "https://api.signic.email/idx") */
   indexerUrl: string;
   /** WildDuck API base URL (e.g. "https://api.signic.email/api") */
@@ -25,6 +39,12 @@ export interface SignicClientConfig {
   emailDomain?: string;
   /** EVM chain ID for the SIWE message (default: 1 = Ethereum mainnet) */
   chainId?: number;
+  /**
+   * Callback to sign a message with the wallet.
+   * Must return both the wallet address and the signature so they are always paired.
+   * The signature can be a hex string (0x-prefixed) or base64 string.
+   */
+  signMessage: (message: string) => Promise<SignMessageResult>;
 }
 
 /** An email address with an optional display name. */

@@ -1,7 +1,7 @@
 {
   "name": "@sudobility/signic_sdk",
-  "version": "0.1.6",
-  "description": "Node.js and browser SDK for Signic email - sign in with Ethereum, read and manage emails",
+  "version": "0.1.7",
+  "description": "Node.js and browser SDK for Signic email - sign in with Ethereum or Solana, read and manage emails",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -31,9 +31,7 @@
     "verify": "bun run typecheck && bun run lint && bun run test:run && bun run build",
     "prepublishOnly": "bun run clean && bun run verify"
   },
-  "dependencies": {
-    "viem": "^2.38.4"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@eslint/js": "^9.38.0",
     "@types/node": "^24.9.1",
